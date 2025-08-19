@@ -24,7 +24,7 @@ Blue2Mesh is an experimental Rust library for converting 2D millifluidic designs
 - **Boundary Layer Generation**: Automatic boundary layer mesh for accurate CFD
 - **Region Marking**: Proper boundary condition assignment for CFD solvers
 - **Quality Validation**: CFD-specific mesh quality requirements
-- **OxiCFD Integration**: Seamless workflow with CFD analysis
+- **Standard CFD Formats**: Export to VTK, OpenFOAM, and other CFD formats
 
 ### ⚠️ **Experimental Features (Not Production Ready)**
 
@@ -191,7 +191,7 @@ blue2mesh/
 
 ## Integration
 
-### With OxiCFD
+### With CFD Solvers
 ```rust
 // Generate mesh optimized for CFD
 let mesh = MeshGenerator::new()
@@ -199,7 +199,7 @@ let mesh = MeshGenerator::new()
     .with_boundary_layers(true)
     .generate_from_design(&design)?;
 
-// Export for oxicfd
+// Export for CFD analysis
 CfdExporter::new().export_vtk(&mesh, "cfd_mesh.vtk")?;
 ```
 
@@ -245,7 +245,6 @@ cargo run --example manufacturing_export
 
 ### Optional Dependencies
 
-- **oxicfd**: CFD integration (feature: `oxicfd-integration`)
 - **meshopt**: Mesh optimization (feature: `quality-control`)
 - **plotters**: Visualization (feature: `visualization`)
 
@@ -266,4 +265,3 @@ MIT License - see [LICENSE](../LICENSE) for details.
 
 - [**scheme**](https://github.com/ryancinsight/scheme): 2D millifluidic design and pattern generation
 - [**csgrs**](https://github.com/timschmidt/csgrs): 3D constructive solid geometry operations
-- **oxicfd**: Computational fluid dynamics framework (experimental)

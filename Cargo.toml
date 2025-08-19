@@ -2,10 +2,10 @@
 name = "blue2mesh"
 version = "0.1.0"
 edition = "2021"
-description = "3D mesh generation for millifluidic devices from 2D scheme designs"
+description = "Experimental 3D mesh generation for millifluidic devices from 2D scheme designs"
 license = "MIT"
-repository = "https://github.com/ryancinsight/gcli"
-keywords = ["mesh-generation", "millifluidics", "3d-modeling", "cfd", "manufacturing"]
+repository = "https://github.com/ryancinsight/blue2mesh"
+keywords = ["mesh-generation", "millifluidics", "3d-modeling", "cfd", "experimental"]
 categories = ["science", "simulation", "graphics"]
 authors = ["Ryan Clanton <ryanclanton@outlook.com>"]
 
@@ -19,8 +19,8 @@ ndarray.workspace = true
 rayon = { workspace = true, optional = true }
 
 # Mesh and geometry dependencies
-csgrs = { path = "../csgrs" }
-scheme = { path = "../scheme" }
+csgrs = { git = "https://github.com/timschmidt/csgrs.git" }
+scheme = { git = "https://github.com/ryancinsight/scheme.git" }
 
 # Additional mesh processing
 meshopt = { version = "0.2", optional = true }  # Mesh optimization
@@ -29,9 +29,6 @@ spade = "2.4"  # Spatial data structures
 log = "0.4"  # Logging
 env_logger = "0.10"  # Environment-based logging
 chrono = { version = "0.4", features = ["serde"] }  # Date/time handling
-
-# CFD integration
-oxicfd = { path = "../oxicfd", optional = true }
 
 # Visualization
 plotters = { workspace = true, optional = true }
@@ -59,9 +56,6 @@ openfoam-export = []
 cgns-export = []
 stl-export = ["csgrs/stl-io"]
 
-# Integration features
-oxicfd-integration = ["oxicfd"]
-
 # Performance features
 parallel = ["rayon", "ndarray/rayon"]
 simd = []  # SIMD features to be configured based on nalgebra version
@@ -69,7 +63,7 @@ simd = []  # SIMD features to be configured based on nalgebra version
 # Visualization features
 visualization = ["plotters"]
 
-# Manufacturing export
+# Manufacturing export (experimental)
 manufacturing = ["stl-export", "csgrs/stl-io"]
 
 # Examples
