@@ -1,0 +1,112 @@
+[package]
+name = "blue2mesh"
+version = "0.1.0"
+edition = "2021"
+description = "3D mesh generation for millifluidic devices from 2D scheme designs"
+license = "MIT"
+repository = "https://github.com/ryancinsight/gcli"
+keywords = ["mesh-generation", "millifluidics", "3d-modeling", "cfd", "manufacturing"]
+categories = ["science", "simulation", "graphics"]
+authors = ["Ryan Clanton <ryanclanton@outlook.com>"]
+
+[dependencies]
+# Core dependencies from workspace
+thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+nalgebra.workspace = true
+ndarray.workspace = true
+rayon = { workspace = true, optional = true }
+
+# Mesh and geometry dependencies
+csgrs = { path = "../csgrs" }
+scheme = { path = "../scheme" }
+
+# Additional mesh processing
+meshopt = { version = "0.2", optional = true }  # Mesh optimization
+delaunator = "1.0"  # Delaunay triangulation
+spade = "2.4"  # Spatial data structures
+log = "0.4"  # Logging
+env_logger = "0.10"  # Environment-based logging
+chrono = { version = "0.4", features = ["serde"] }  # Date/time handling
+
+# CFD integration
+oxicfd = { path = "../oxicfd", optional = true }
+
+# Visualization
+plotters = { workspace = true, optional = true }
+
+# File I/O
+bytemuck = "1.14"  # Safe transmutation for binary formats
+
+[dev-dependencies]
+criterion.workspace = true
+approx.workspace = true
+tempfile = "3.8"
+
+[features]
+default = ["mesh-generation", "quality-control", "cfd-export"]
+
+# Core mesh generation capabilities
+mesh-generation = []
+quality-control = ["meshopt"]
+adaptive-refinement = []
+
+# Export format support
+cfd-export = []
+vtk-export = []
+openfoam-export = []
+cgns-export = []
+stl-export = ["csgrs/stl-io"]
+
+# Integration features
+oxicfd-integration = ["oxicfd"]
+
+# Performance features
+parallel = ["rayon", "ndarray/rayon"]
+simd = []  # SIMD features to be configured based on nalgebra version
+
+# Visualization features
+visualization = ["plotters"]
+
+# Manufacturing export
+manufacturing = ["stl-export", "csgrs/stl-io"]
+
+# Examples
+[[example]]
+name = "basic_extrusion"
+path = "examples/basic_extrusion.rs"
+
+[[example]]
+name = "bifurcation_mesh"
+path = "examples/bifurcation_mesh.rs"
+
+[[example]]
+name = "serpentine_3d"
+path = "examples/serpentine_3d.rs"
+
+[[example]]
+name = "cfd_ready_export"
+path = "examples/cfd_ready_export.rs"
+
+[[example]]
+name = "manufacturing_export"
+path = "examples/manufacturing_export.rs"
+
+# Benchmarks will be added later
+# [[bench]]
+# name = "mesh_generation_benchmarks"
+# harness = false
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+cargo = { level = "warn", priority = -1 }
+
+# Allow specific lints for mesh processing
+too_many_arguments = "allow"
+too_many_lines = "allow"
+module_name_repetitions = "allow"
+similar_names = "allow"
+float_cmp = "allow"  # Common in geometric computations
