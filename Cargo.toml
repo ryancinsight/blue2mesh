@@ -66,27 +66,6 @@ visualization = ["plotters"]
 # Manufacturing export (experimental)
 manufacturing = ["stl-export", "csgrs/stl-io"]
 
-# Examples
-[[example]]
-name = "basic_extrusion"
-path = "examples/basic_extrusion.rs"
-
-[[example]]
-name = "bifurcation_mesh"
-path = "examples/bifurcation_mesh.rs"
-
-[[example]]
-name = "serpentine_3d"
-path = "examples/serpentine_3d.rs"
-
-[[example]]
-name = "cfd_ready_export"
-path = "examples/cfd_ready_export.rs"
-
-[[example]]
-name = "manufacturing_export"
-path = "examples/manufacturing_export.rs"
-
 # Benchmarks will be added later
 # [[bench]]
 # name = "mesh_generation_benchmarks"

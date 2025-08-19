@@ -9,7 +9,7 @@
 //! Run with: cargo run --example scheme_to_stl_demo -p blue2mesh
 
 use scheme::{
-    geometry::{generator::create_geometry, SplitType, ChannelSystem},
+    geometry::{generator::create_geometry, ChannelSystem},
     config::{GeometryConfig, ChannelTypeConfig},
     visualizations::schematic::plot_geometry,
 };

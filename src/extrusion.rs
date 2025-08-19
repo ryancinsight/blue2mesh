@@ -467,7 +467,6 @@ impl ExtrusionEngine {
 
 /// 3D mesh builder for extrusion operations
 pub struct Mesh3DBuilder {
-    config: ExtrusionConfig,
     vertices: Vec<Point3<f64>>,
     faces: Vec<[usize; 3]>,
     channel_regions: HashMap<usize, Vec<usize>>, // Channel ID -> face indices
@@ -476,9 +475,8 @@ pub struct Mesh3DBuilder {
 
 impl Mesh3DBuilder {
     /// Create new mesh builder
-    pub fn new(config: &ExtrusionConfig) -> Self {
+    pub fn new(_config: &ExtrusionConfig) -> Self {
         Self {
-            config: config.clone(),
             vertices: Vec::new(),
             faces: Vec::new(),
             channel_regions: HashMap::new(),

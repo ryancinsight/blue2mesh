@@ -13,6 +13,7 @@ pub struct JunctionOptimizer {
     /// Smoothing radius for junction transitions
     smoothing_radius: f64,
     /// Whether to optimize for CFD
+    #[allow(dead_code)]
     cfd_optimized: bool,
 }
 

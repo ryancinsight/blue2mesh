@@ -11,8 +11,10 @@ use crate::mesh::Mesh3D;
 /// Channel mesh generator with type-specific algorithms
 pub struct ChannelMeshGenerator {
     /// Base mesh resolution
+    #[allow(dead_code)]
     resolution: f64,
     /// Quality requirements
+    #[allow(dead_code)]
     quality_level: crate::QualityLevel,
 }
 

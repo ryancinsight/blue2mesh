@@ -27,7 +27,8 @@
 //!
 //! ## Basic 3D Extrusion
 //!
-//! ```rust
+//! ```rust,no_run
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! use blue2mesh::{
 //!     import::SchemeImporter,
 //!     extrusion::{ExtrusionConfig, ExtrusionEngine},
@@ -35,7 +36,7 @@
 //! };
 //!
 //! // Import 2D design from scheme
-//! let design = SchemeImporter::from_json("design.json")?;
+//! let design = SchemeImporter::from_json_file("design.json")?;
 //!
 //! // Configure 3D extrusion
 //! let config = ExtrusionConfig::new()
@@ -50,22 +51,26 @@
 //! // Export for CFD
 //! CfdExporter::new()
 //!     .export_vtk(&mesh, "device.vtk")?;
+//! # Ok(())
+//! # }
 //! ```
 //!
-//! ## Advanced Junction Optimization
+//! ## Advanced Mesh Generation
 //!
-//! ```rust
+//! ```rust,no_run
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! use blue2mesh::{
 //!     mesh::MeshGenerator,
-//!     junctions::JunctionOptimizer,
-//!     quality::QualityController,
+//!     QualityLevel,
 //! };
 //!
-//! // Generate mesh with junction optimization
+//! // Generate high-quality mesh
 //! let mesh = MeshGenerator::new()
-//!     .with_junction_optimizer(JunctionOptimizer::smooth_transitions())
-//!     .with_quality_control(QualityController::cfd_ready())
+//!     .with_quality_level(QualityLevel::HighQuality)
+//!     .with_resolution(5e-6)  // 5 μm resolution
 //!     .generate_from_scheme("design.json")?;
+//! # Ok(())
+//! # }
 //! ```
 
 pub mod error;

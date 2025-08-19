@@ -408,45 +408,7 @@ impl SchemeImporter {
             .sum()
     }
 
-    /// Parse channel type from metadata
-    fn parse_channel_type(&self, metadata: &HashMap<String, String>) -> MeshResult<ChannelType> {
-        let type_str = metadata.get("channel_type")
-            .unwrap_or(&"straight".to_string())
-            .to_lowercase();
 
-        match type_str.as_str() {
-            "straight" => Ok(ChannelType::Straight),
-            "smoothstraight" => Ok(ChannelType::SmoothStraight),
-            "serpentine" => {
-                let turns = metadata.get("turns")
-                    .and_then(|t| t.parse::<usize>().ok())
-                    .unwrap_or(1);
-                Ok(ChannelType::Serpentine { turns })
-            }
-            "arc" => {
-                let radius = metadata.get("radius")
-                    .and_then(|r| r.parse::<f64>().ok())
-                    .unwrap_or(1e-3);
-                let angle = metadata.get("angle")
-                    .and_then(|a| a.parse::<f64>().ok())
-                    .unwrap_or(std::f64::consts::PI / 2.0);
-                Ok(ChannelType::Arc { radius, angle })
-            }
-            "frustum" => {
-                let inlet_width = metadata.get("inlet_width")
-                    .and_then(|w| w.parse::<f64>().ok())
-                    .unwrap_or(100e-6);
-                let outlet_width = metadata.get("outlet_width")
-                    .and_then(|w| w.parse::<f64>().ok())
-                    .unwrap_or(50e-6);
-                Ok(ChannelType::Frustum { inlet_width, outlet_width })
-            }
-            _ => {
-                log::warn!("Unknown channel type '{}', using Straight", type_str);
-                Ok(ChannelType::Straight)
-            }
-        }
-    }
 
     /// Calculate design bounds
     fn calculate_bounds(&self, nodes: &[DesignNode], channels: &[DesignChannel]) -> DesignBounds {
