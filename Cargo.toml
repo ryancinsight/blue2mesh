@@ -9,18 +9,28 @@ keywords = ["mesh-generation", "millifluidics", "3d-modeling", "cfd", "experimen
 categories = ["science", "simulation", "graphics"]
 authors = ["Ryan Clanton <ryanclanton@outlook.com>"]
 
+[workspace]
+members = ["."]
+resolver = "2"
+
 [dependencies]
-# Core dependencies from workspace
-thiserror.workspace = true
-serde.workspace = true
-serde_json.workspace = true
-nalgebra.workspace = true
-ndarray.workspace = true
-rayon = { workspace = true, optional = true }
+# Core dependencies
+thiserror = "1.0.56"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+nalgebra = "0.34.1"
+ndarray = "0.15"
+rayon = { version = "1.7", optional = true }
 
 # Mesh and geometry dependencies
-csgrs = { git = "https://github.com/timschmidt/csgrs.git" }
-scheme = { git = "https://github.com/ryancinsight/scheme.git" }
+csgrs = { git = "https://github.com/timschmidt/csgrs.git", features = [
+    "f64",           # Use f64 precision
+    "stl-io",        # STL file format support
+    "obj-io",        # OBJ file format support
+    "ply-io",        # PLY file format support
+    "delaunay",      # Delaunay triangulation (required, mutually exclusive with earcut)
+] }
+cfd-schematics = { path = "../CFDrs/crates/cfd-schematics" }
 
 # Additional mesh processing
 meshopt = { version = "0.2", optional = true }  # Mesh optimization
@@ -31,14 +41,14 @@ env_logger = "0.10"  # Environment-based logging
 chrono = { version = "0.4", features = ["serde"] }  # Date/time handling
 
 # Visualization
-plotters = { workspace = true, optional = true }
+plotters = { version = "0.3.5", optional = true }
 
 # File I/O
 bytemuck = "1.14"  # Safe transmutation for binary formats
 
 [dev-dependencies]
-criterion.workspace = true
-approx.workspace = true
+criterion = "0.5"
+approx = "0.5"
 tempfile = "3.8"
 
 [features]

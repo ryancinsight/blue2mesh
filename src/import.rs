@@ -6,7 +6,8 @@
 
 use crate::error::{MeshError, MeshResult};
 use nalgebra::{Point2, Point3};
-use scheme::geometry::types::{ChannelSystem, Node, Channel, ChannelType as SchemeChannelType};
+use cfd_schematics::geometry::types::{ChannelSystem, Node, Channel};
+use cfd_schematics::geometry::ChannelType as SchemeChannelType;
 use serde::{Deserialize, Serialize};
 use serde_json;
 use chrono;
@@ -36,7 +37,7 @@ pub struct DesignMetadata {
     pub name: String,
     /// Design description
     pub description: String,
-    /// Design dimensions (width, height) in meters
+    /// Design dimensions (width, height) in millimeters
     pub box_dims: [f64; 2],
     /// Creation timestamp
     pub created_at: Option<String>,
@@ -85,7 +86,7 @@ pub struct DesignChannel {
 }
 
 /// Node type classification for mesh generation
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NodeType {
     /// Fluid inlet
     Inlet,
@@ -115,17 +116,17 @@ pub enum ChannelType {
 /// Channel properties for mesh generation
 #[derive(Debug, Clone)]
 pub struct ChannelMeshProperties {
-    /// Channel width (m)
+    /// Channel width (mm)
     pub width: f64,
-    /// Channel height (m)
+    /// Channel height (mm)
     pub height: f64,
-    /// Channel length (m)
+    /// Channel length (mm)
     pub length: f64,
-    /// Wall thickness (m)
+    /// Wall thickness (mm)
     pub wall_thickness: f64,
-    /// Surface roughness (m)
+    /// Surface roughness (mm)
     pub roughness: f64,
-    /// Mesh resolution (m)
+    /// Mesh resolution (mm)
     pub mesh_resolution: f64,
     /// Whether channel requires special mesh treatment
     pub requires_refinement: bool,
@@ -173,35 +174,36 @@ pub struct SchemeImporter {
 
 impl SchemeImporter {
     /// Create new importer with default settings
-    pub fn new() -> Self {
+    #[must_use] pub const fn new() -> Self {
         Self {
-            default_height: crate::defaults::DEFAULT_CHANNEL_HEIGHT,
-            default_wall_thickness: crate::defaults::DEFAULT_WALL_THICKNESS,
-            default_mesh_resolution: crate::defaults::DEFAULT_MESH_RESOLUTION,
+            // Scheme geometry is represented in millimeters.
+            default_height: crate::defaults::DEFAULT_CHANNEL_HEIGHT * 1e3,
+            default_wall_thickness: crate::defaults::DEFAULT_WALL_THICKNESS * 1e3,
+            default_mesh_resolution: crate::defaults::DEFAULT_MESH_RESOLUTION * 1e3,
             validate_on_import: true,
         }
     }
 
     /// Set default channel height
-    pub fn with_default_height(mut self, height: f64) -> Self {
+    #[must_use] pub const fn with_default_height(mut self, height: f64) -> Self {
         self.default_height = height;
         self
     }
 
     /// Set default wall thickness
-    pub fn with_default_wall_thickness(mut self, thickness: f64) -> Self {
+    #[must_use] pub const fn with_default_wall_thickness(mut self, thickness: f64) -> Self {
         self.default_wall_thickness = thickness;
         self
     }
 
     /// Set default mesh resolution
-    pub fn with_default_mesh_resolution(mut self, resolution: f64) -> Self {
+    #[must_use] pub const fn with_default_mesh_resolution(mut self, resolution: f64) -> Self {
         self.default_mesh_resolution = resolution;
         self
     }
 
     /// Enable or disable validation on import
-    pub fn with_validation(mut self, validate: bool) -> Self {
+    #[must_use] pub const fn with_validation(mut self, validate: bool) -> Self {
         self.validate_on_import = validate;
         self
     }
@@ -222,7 +224,7 @@ impl SchemeImporter {
     pub fn import_from_file<P: AsRef<Path>>(&self, path: P) -> MeshResult<DesignData> {
         let json_str = fs::read_to_string(path)
             .map_err(|e| MeshError::scheme_integration_error(
-                format!("Failed to read scheme JSON file: {}", e)
+                format!("Failed to read scheme JSON file: {e}")
             ))?;
         
         self.import_from_string(&json_str)
@@ -233,7 +235,7 @@ impl SchemeImporter {
         // Parse scheme JSON export
         let channel_system: ChannelSystem = serde_json::from_str(json_str)
             .map_err(|e| MeshError::scheme_integration_error(
-                format!("Failed to parse scheme JSON: {}", e)
+                format!("Failed to parse scheme JSON: {e}")
             ))?;
 
         self.convert_scheme_to_design(channel_system)
@@ -302,7 +304,7 @@ impl SchemeImporter {
             position_2d,
             position_3d,
             node_type,
-            diameter: 1e-3, // Default 1mm diameter
+            diameter: 1.0, // Default 1mm diameter
             metadata: HashMap::new(),
         })
     }
@@ -347,9 +349,21 @@ impl SchemeImporter {
     fn extract_channel_path(&self, scheme_channel: &Channel, channel_system: &ChannelSystem) -> MeshResult<(Vec<Point2<f64>>, Vec<Point3<f64>>)> {
         let path_2d_tuples = match &scheme_channel.channel_type {
             SchemeChannelType::Straight => {
-                // For straight channels, create path from node positions
-                let from_node = &channel_system.nodes[scheme_channel.from_node];
-                let to_node = &channel_system.nodes[scheme_channel.to_node];
+                // For straight channels, create path from node IDs.
+                // Do not index nodes by ID directly because IDs are not guaranteed to
+                // match vector indices in all scheme exports.
+                let from_node = channel_system.nodes.iter()
+                    .find(|node| node.id == scheme_channel.from_node)
+                    .ok_or_else(|| MeshError::scheme_integration_error(format!(
+                        "Channel {} references missing source node id {}",
+                        scheme_channel.id, scheme_channel.from_node
+                    )))?;
+                let to_node = channel_system.nodes.iter()
+                    .find(|node| node.id == scheme_channel.to_node)
+                    .ok_or_else(|| MeshError::scheme_integration_error(format!(
+                        "Channel {} references missing target node id {}",
+                        scheme_channel.id, scheme_channel.to_node
+                    )))?;
                 vec![from_node.point, to_node.point]
             },
             SchemeChannelType::SmoothStraight { path } => path.clone(),
@@ -403,7 +417,7 @@ impl SchemeImporter {
             .map(|window| {
                 let dx = window[1].x - window[0].x;
                 let dy = window[1].y - window[0].y;
-                (dx * dx + dy * dy).sqrt()
+                dx.hypot(dy)
             })
             .sum()
     }
@@ -471,18 +485,18 @@ impl SchemeImporter {
         let design_width = bounds.max_x - bounds.min_x;
         let design_height = bounds.max_y - bounds.min_y;
 
-        if design_width < 1e-6 || design_height < 1e-6 {
+        if design_width < 1e-3 || design_height < 1e-3 {
             errors.push("Design dimensions are too small for mesh generation".to_string());
         }
 
-        if design_width > 0.1 || design_height > 0.1 {
+        if design_width > 1000.0 || design_height > 1000.0 {
             warnings.push("Large design dimensions may require coarse mesh resolution".to_string());
         }
 
         // Check channel properties
         for channel in channels {
-            if channel.properties.width < 1e-6 {
-                warnings.push(format!("Channel {} has very small width: {:.2e} m", 
+            if channel.properties.width < 1e-3 {
+                warnings.push(format!("Channel {} has very small width: {:.2e} mm", 
                                     channel.id, channel.properties.width));
             }
 
@@ -538,45 +552,45 @@ impl Default for SchemeImporter {
 
 impl DesignData {
     /// Get node by ID
-    pub fn get_node(&self, node_id: usize) -> Option<&DesignNode> {
+    #[must_use] pub fn get_node(&self, node_id: usize) -> Option<&DesignNode> {
         self.nodes.iter().find(|n| n.id == node_id)
     }
 
     /// Get channel by ID
-    pub fn get_channel(&self, channel_id: usize) -> Option<&DesignChannel> {
+    #[must_use] pub fn get_channel(&self, channel_id: usize) -> Option<&DesignChannel> {
         self.channels.iter().find(|c| c.id == channel_id)
     }
 
     /// Get all inlet nodes
-    pub fn inlet_nodes(&self) -> Vec<&DesignNode> {
+    #[must_use] pub fn inlet_nodes(&self) -> Vec<&DesignNode> {
         self.nodes.iter()
             .filter(|n| matches!(n.node_type, NodeType::Inlet))
             .collect()
     }
 
     /// Get all outlet nodes
-    pub fn outlet_nodes(&self) -> Vec<&DesignNode> {
+    #[must_use] pub fn outlet_nodes(&self) -> Vec<&DesignNode> {
         self.nodes.iter()
             .filter(|n| matches!(n.node_type, NodeType::Outlet))
             .collect()
     }
 
     /// Get channels connected to a node
-    pub fn channels_for_node(&self, node_id: usize) -> Vec<&DesignChannel> {
+    #[must_use] pub fn channels_for_node(&self, node_id: usize) -> Vec<&DesignChannel> {
         self.channels.iter()
             .filter(|c| c.from_node == node_id || c.to_node == node_id)
             .collect()
     }
 
     /// Calculate total design volume
-    pub fn total_volume(&self) -> f64 {
+    #[must_use] pub fn total_volume(&self) -> f64 {
         self.channels.iter()
             .map(|c| c.properties.width * c.properties.height * c.properties.length)
             .sum()
     }
 
     /// Calculate total surface area
-    pub fn total_surface_area(&self) -> f64 {
+    #[must_use] pub fn total_surface_area(&self) -> f64 {
         self.channels.iter()
             .map(|c| {
                 let perimeter = 2.0 * (c.properties.width + c.properties.height);
@@ -588,30 +602,30 @@ impl DesignData {
 
 impl ChannelMeshProperties {
     /// Create default properties
-    pub fn default_properties() -> Self {
+    #[must_use] pub const fn default_properties() -> Self {
         Self {
-            width: 100e-6,
-            height: crate::defaults::DEFAULT_CHANNEL_HEIGHT,
-            length: 1e-3,
-            wall_thickness: crate::defaults::DEFAULT_WALL_THICKNESS,
-            roughness: 1e-6,
-            mesh_resolution: crate::defaults::DEFAULT_MESH_RESOLUTION,
+            width: 0.1,
+            height: crate::defaults::DEFAULT_CHANNEL_HEIGHT * 1e3,
+            length: 1.0,
+            wall_thickness: crate::defaults::DEFAULT_WALL_THICKNESS * 1e3,
+            roughness: 0.001,
+            mesh_resolution: crate::defaults::DEFAULT_MESH_RESOLUTION * 1e3,
             requires_refinement: false,
         }
     }
 
     /// Calculate hydraulic diameter
-    pub fn hydraulic_diameter(&self) -> f64 {
+    #[must_use] pub fn hydraulic_diameter(&self) -> f64 {
         4.0 * (self.width * self.height) / (2.0 * (self.width + self.height))
     }
 
     /// Calculate aspect ratio
-    pub fn aspect_ratio(&self) -> f64 {
+    #[must_use] pub fn aspect_ratio(&self) -> f64 {
         self.width.max(self.height) / self.width.min(self.height)
     }
 
     /// Estimate mesh element count
-    pub fn estimated_element_count(&self) -> usize {
+    #[must_use] pub fn estimated_element_count(&self) -> usize {
         let elements_per_length = (self.length / self.mesh_resolution).ceil() as usize;
         let elements_per_width = (self.width / self.mesh_resolution).ceil() as usize;
         let elements_per_height = (self.height / self.mesh_resolution).ceil() as usize;

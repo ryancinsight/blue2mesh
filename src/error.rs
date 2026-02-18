@@ -1,4 +1,4 @@
-//! Error handling for the Blue2Mesh framework
+//! Error handling for the `Blue2Mesh` framework
 //!
 //! This module provides comprehensive error types for all mesh generation
 //! operations, following Rust best practices for error handling and providing
@@ -7,10 +7,10 @@
 use thiserror::Error;
 use serde_json;
 
-/// Result type alias for Blue2Mesh operations
+/// Result type alias for `Blue2Mesh` operations
 pub type MeshResult<T> = Result<T, MeshError>;
 
-/// Comprehensive error types for Blue2Mesh operations
+/// Comprehensive error types for `Blue2Mesh` operations
 #[derive(Error, Debug)]
 pub enum MeshError {
     /// Invalid input data or parameters
@@ -153,7 +153,7 @@ impl MeshError {
 
 /// Specialized error types for different mesh operations
 pub mod specialized {
-    use super::*;
+    use super::Error;
 
     /// Errors specific to mesh quality validation
     #[derive(Error, Debug)]
@@ -246,7 +246,7 @@ impl ErrorContext {
         self
     }
 
-    pub fn with_mesh_stats(mut self, stats: MeshStatistics) -> Self {
+    #[must_use] pub const fn with_mesh_stats(mut self, stats: MeshStatistics) -> Self {
         self.mesh_statistics = Some(stats);
         self
     }
@@ -258,10 +258,9 @@ pub trait ErrorContextExt<T> {
 }
 
 impl<T> ErrorContextExt<T> for MeshResult<T> {
-    fn with_context(self, context: ErrorContext) -> MeshResult<T> {
-        self.map_err(|e| {
-            eprintln!("Error context: {:?}", context);
-            e
+    fn with_context(self, context: ErrorContext) -> Self {
+        self.inspect_err(|e| {
+            eprintln!("Error context: {context:?}");
         })
     }
 }
@@ -270,16 +269,16 @@ impl<T> ErrorContextExt<T> for MeshResult<T> {
 impl From<csgrs::io::IoError> for MeshError {
     fn from(err: csgrs::io::IoError) -> Self {
         Self::CsgError {
-            message: format!("CSG operation failed: {:?}", err),
+            message: format!("CSG operation failed: {err:?}"),
         }
     }
 }
 
 /// Convert scheme errors to mesh errors
-impl From<scheme::error::SchemeError> for MeshError {
-    fn from(err: scheme::error::SchemeError) -> Self {
+impl From<cfd_schematics::SchemeError> for MeshError {
+    fn from(err: cfd_schematics::SchemeError) -> Self {
         Self::SchemeIntegrationError {
-            message: format!("Scheme integration failed: {:?}", err),
+            message: format!("Scheme integration failed: {err:?}"),
         }
     }
 }

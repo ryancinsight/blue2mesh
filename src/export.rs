@@ -41,7 +41,7 @@ pub enum ExportUnits {
 
 impl CfdExporter {
     /// Create new CFD exporter
-    pub fn new() -> Self {
+    #[must_use] pub const fn new() -> Self {
         Self {
             validate_before_export: true,
             precision: 6,
@@ -49,25 +49,25 @@ impl CfdExporter {
     }
 
     /// Set validation before export
-    pub fn with_validation(mut self, validate: bool) -> Self {
+    #[must_use] pub const fn with_validation(mut self, validate: bool) -> Self {
         self.validate_before_export = validate;
         self
     }
 
     /// Set coordinate precision
-    pub fn with_precision(mut self, precision: usize) -> Self {
+    #[must_use] pub const fn with_precision(mut self, precision: usize) -> Self {
         self.precision = precision;
         self
     }
 
-    /// Export mesh in VTK format for ParaView and CFD solvers
+    /// Export mesh in VTK format for `ParaView` and CFD solvers
     pub fn export_vtk<P: AsRef<Path>>(&self, mesh: &Mesh3D, path: P) -> MeshResult<()> {
         if self.validate_before_export {
             self.validate_mesh_for_cfd(mesh)?;
         }
 
         let file = File::create(path)
-            .map_err(|e| MeshError::export_error(format!("Failed to create VTK file: {}", e)))?;
+            .map_err(|e| MeshError::export_error(format!("Failed to create VTK file: {e}")))?;
         let mut writer = BufWriter::new(file);
 
         // Write VTK header
@@ -127,7 +127,7 @@ impl CfdExporter {
             }
             
             for region_id in region_ids {
-                writeln!(writer, "{}", region_id)?;
+                writeln!(writer, "{region_id}")?;
             }
         }
 
@@ -138,7 +138,7 @@ impl CfdExporter {
         Ok(())
     }
 
-    /// Export mesh in OpenFOAM polyMesh format
+    /// Export mesh in `OpenFOAM` polyMesh format
     pub fn export_openfoam<P: AsRef<Path>>(&self, mesh: &Mesh3D, directory: P) -> MeshResult<()> {
         if self.validate_before_export {
             self.validate_mesh_for_cfd(mesh)?;
@@ -147,7 +147,7 @@ impl CfdExporter {
         // Create polyMesh directory structure
         let poly_mesh_dir = directory.as_ref().join("polyMesh");
         std::fs::create_dir_all(&poly_mesh_dir)
-            .map_err(|e| MeshError::export_error(format!("Failed to create polyMesh directory: {}", e)))?;
+            .map_err(|e| MeshError::export_error(format!("Failed to create polyMesh directory: {e}")))?;
 
         // Export points file
         self.export_openfoam_points(mesh, &poly_mesh_dir)?;
@@ -164,7 +164,7 @@ impl CfdExporter {
         // Export boundary file
         self.export_openfoam_boundary(mesh, &poly_mesh_dir)?;
 
-        log::info!("Exported OpenFOAM polyMesh to {:?}", poly_mesh_dir);
+        log::info!("Exported OpenFOAM polyMesh to {poly_mesh_dir:?}");
         Ok(())
     }
 
@@ -183,7 +183,7 @@ impl CfdExporter {
             for &vertex_idx in face {
                 if vertex_idx >= mesh.vertices.len() {
                     return Err(MeshError::export_error(
-                        format!("Face {} references invalid vertex index {}", i, vertex_idx)
+                        format!("Face {i} references invalid vertex index {vertex_idx}")
                     ));
                 }
             }
@@ -202,7 +202,7 @@ impl CfdExporter {
         Ok(())
     }
 
-    /// Export OpenFOAM points file
+    /// Export `OpenFOAM` points file
     fn export_openfoam_points(&self, mesh: &Mesh3D, directory: &Path) -> MeshResult<()> {
         let points_file = directory.join("points");
         let file = File::create(points_file)?;
@@ -231,28 +231,28 @@ impl CfdExporter {
         Ok(())
     }
 
-    /// Export OpenFOAM faces file (placeholder)
+    /// Export `OpenFOAM` faces file (placeholder)
     fn export_openfoam_faces(&self, mesh: &Mesh3D, _directory: &Path) -> MeshResult<()> {
         log::info!("Exporting OpenFOAM faces file with {} faces", mesh.faces.len());
         // Placeholder - full OpenFOAM export is complex
         Ok(())
     }
 
-    /// Export OpenFOAM owner file (placeholder)
+    /// Export `OpenFOAM` owner file (placeholder)
     fn export_openfoam_owner(&self, _mesh: &Mesh3D, _directory: &Path) -> MeshResult<()> {
         log::info!("Exporting OpenFOAM owner file");
         // Placeholder - requires cell connectivity analysis
         Ok(())
     }
 
-    /// Export OpenFOAM neighbour file (placeholder)
+    /// Export `OpenFOAM` neighbour file (placeholder)
     fn export_openfoam_neighbour(&self, _mesh: &Mesh3D, _directory: &Path) -> MeshResult<()> {
         log::info!("Exporting OpenFOAM neighbour file");
         // Placeholder - requires cell connectivity analysis
         Ok(())
     }
 
-    /// Export OpenFOAM boundary file (placeholder)
+    /// Export `OpenFOAM` boundary file (placeholder)
     fn export_openfoam_boundary(&self, _mesh: &Mesh3D, _directory: &Path) -> MeshResult<()> {
         log::info!("Exporting OpenFOAM boundary file");
         // Placeholder - requires boundary patch identification
@@ -262,7 +262,7 @@ impl CfdExporter {
 
 impl ManufacturingExporter {
     /// Create new manufacturing exporter
-    pub fn new() -> Self {
+    #[must_use] pub const fn new() -> Self {
         Self {
             validate_before_export: true,
             units: ExportUnits::Millimeters,
@@ -270,7 +270,7 @@ impl ManufacturingExporter {
     }
 
     /// Set export units
-    pub fn with_units(mut self, units: ExportUnits) -> Self {
+    #[must_use] pub const fn with_units(mut self, units: ExportUnits) -> Self {
         self.units = units;
         self
     }
@@ -281,19 +281,47 @@ impl ManufacturingExporter {
             self.validate_mesh_for_manufacturing(mesh)?;
         }
 
-        // Convert to csgrs mesh and use its STL export
-        let csgrs_mesh = mesh.to_csgrs_mesh()?;
-        
-        // Apply unit conversion
-        let scale_factor = self.get_scale_factor();
-        let scaled_mesh = self.scale_mesh(&csgrs_mesh, scale_factor)?;
+        let stl_content = if let Some(ref csg_mesh) = mesh.csg_mesh {
+            println!("   🚀 Using direct CSG mesh for STL export (no conversion needed)");
+            use csgrs::csg::CSG;
+            use csgrs::float_types::{Real, parry3d::na::Matrix4};
+
+            let scale_matrix = Matrix4::new_scaling(self.get_scale_factor() as Real);
+            let scaled_mesh = csg_mesh.transform(&scale_matrix);
+            scaled_mesh.to_stl_ascii("millifluidic_device")
+        } else {
+            println!("   🔄 Converting Mesh3D to CSG mesh for STL export");
+            let csgrs_mesh = mesh.to_csgrs_mesh()?;
+            let scale_factor = self.get_scale_factor();
+            let scaled_mesh = self.scale_mesh(&csgrs_mesh, scale_factor)?;
+            scaled_mesh.to_stl_ascii("millifluidic_device")
+        };
+
+        std::fs::write(path.as_ref(), stl_content)
+            .map_err(|e| MeshError::export_error(format!("STL export failed: {e:?}")))?;
+
+        log::info!("Exported STL mesh to {:?}", path.as_ref());
+        Ok(())
+    }
+
+    /// Export CSG mesh directly to STL (pure CSG approach)
+    pub fn export_csg_stl<P: AsRef<Path>>(csg_mesh: &csgrs::mesh::Mesh<()>, path: P) -> MeshResult<()> {
+        use csgrs::float_types::Real;
+        use csgrs::float_types::parry3d::na::Matrix4;
+        use csgrs::csg::CSG;
+
+        println!("   🚀 Exporting CSG mesh directly to STL (pure CSG)");
+
+        // Apply unit conversion (convert from meters to millimeters for manufacturing)
+        let scale_matrix = Matrix4::new_scaling(1000.0 as Real); // Convert meters to millimeters
+        let scaled_mesh = csg_mesh.transform(&scale_matrix);
 
         // Export using csgrs STL methods
         let stl_content = scaled_mesh.to_stl_ascii("millifluidic_device");
         std::fs::write(path.as_ref(), stl_content)
-            .map_err(|e| MeshError::export_error(format!("STL export failed: {:?}", e)))?;
+            .map_err(|e| MeshError::export_error(format!("STL export failed: {e:?}")))?;
 
-        log::info!("Exported STL mesh to {:?}", path.as_ref());
+        println!("   ✅ Pure CSG STL export completed: {:?}", path.as_ref());
         Ok(())
     }
 
@@ -332,7 +360,7 @@ impl ManufacturingExporter {
     }
 
     /// Get scale factor for unit conversion
-    fn get_scale_factor(&self) -> f64 {
+    const fn get_scale_factor(&self) -> f64 {
         match self.units {
             ExportUnits::Meters => 1.0,
             ExportUnits::Millimeters => 1000.0,
@@ -341,9 +369,41 @@ impl ManufacturingExporter {
         }
     }
 
+    /// Convert CSG mesh from Mesh<()> to Mesh<String> for export
+    fn convert_csg_mesh_for_export(&self, csg_mesh: &csgrs::mesh::Mesh<()>) -> MeshResult<csgrs::mesh::Mesh<String>> {
+        use csgrs::polygon::Polygon;
+        use csgrs::vertex::Vertex;
+        use csgrs::float_types::Real;
+        use csgrs::float_types::parry3d::na::{Point3 as CsgrsPoint3, Vector3 as CsgrsVector3};
+
+        let mut polygons = Vec::new();
+
+        // Convert polygons from Mesh<()> to Mesh<String>
+        for polygon in &csg_mesh.polygons {
+            let vertices: Vec<Vertex> = polygon.vertices.iter()
+                .map(|vertex| {
+                    Vertex::new(
+                        CsgrsPoint3::new(
+                            vertex.position.x as Real,
+                            vertex.position.y as Real,
+                            vertex.position.z as Real,
+                        ),
+                        CsgrsVector3::new(vertex.normal.x as Real, vertex.normal.y as Real, vertex.normal.z as Real),
+                    )
+                })
+                .collect();
+
+            if vertices.len() >= 3 {
+                polygons.push(Polygon::new(vertices, Some("millifluidic_device".to_string())));
+            }
+        }
+
+        Ok(csgrs::mesh::Mesh::from_polygons(&polygons, Some("millifluidic_device".to_string())))
+    }
+
     /// Scale mesh for unit conversion
     fn scale_mesh(&self, mesh: &csgrs::mesh::Mesh<String>, scale_factor: f64) -> MeshResult<csgrs::mesh::Mesh<String>> {
-        use csgrs::traits::CSG;
+        use csgrs::csg::CSG;
         use csgrs::float_types::{Real, parry3d::na::Matrix4};
 
         // Create scaling transformation matrix

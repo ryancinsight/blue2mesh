@@ -20,7 +20,7 @@ pub struct ChannelMeshGenerator {
 
 impl ChannelMeshGenerator {
     /// Create new channel mesh generator
-    pub fn new(resolution: f64, quality_level: crate::QualityLevel) -> Self {
+    #[must_use] pub const fn new(resolution: f64, quality_level: crate::QualityLevel) -> Self {
         Self {
             resolution,
             quality_level,

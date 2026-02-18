@@ -19,7 +19,7 @@ pub struct JunctionOptimizer {
 
 impl JunctionOptimizer {
     /// Create new junction optimizer
-    pub fn new() -> Self {
+    #[must_use] pub const fn new() -> Self {
         Self {
             smoothing_radius: crate::defaults::DEFAULT_JUNCTION_RADIUS,
             cfd_optimized: true,
@@ -27,7 +27,7 @@ impl JunctionOptimizer {
     }
 
     /// Create optimizer with smooth transitions
-    pub fn smooth_transitions() -> Self {
+    #[must_use] pub fn smooth_transitions() -> Self {
         Self {
             smoothing_radius: crate::defaults::DEFAULT_JUNCTION_RADIUS * 2.0,
             cfd_optimized: true,

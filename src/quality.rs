@@ -123,7 +123,7 @@ pub enum IssueSeverity {
 
 impl QualityController {
     /// Create new quality controller with default requirements
-    pub fn new() -> Self {
+    #[must_use] pub fn new() -> Self {
         Self {
             requirements: QualityRequirements::default(),
             auto_fix: false,
@@ -131,7 +131,7 @@ impl QualityController {
     }
 
     /// Create quality controller for CFD applications
-    pub fn cfd_ready() -> Self {
+    #[must_use] pub const fn cfd_ready() -> Self {
         Self {
             requirements: QualityRequirements::cfd_requirements(),
             auto_fix: true,
@@ -139,7 +139,7 @@ impl QualityController {
     }
 
     /// Create quality controller for manufacturing
-    pub fn manufacturing_ready() -> Self {
+    #[must_use] pub const fn manufacturing_ready() -> Self {
         Self {
             requirements: QualityRequirements::manufacturing_requirements(),
             auto_fix: true,
@@ -147,13 +147,13 @@ impl QualityController {
     }
 
     /// Set quality requirements
-    pub fn with_requirements(mut self, requirements: QualityRequirements) -> Self {
+    #[must_use] pub const fn with_requirements(mut self, requirements: QualityRequirements) -> Self {
         self.requirements = requirements;
         self
     }
 
     /// Enable auto-fix of quality issues
-    pub fn with_auto_fix(mut self, auto_fix: bool) -> Self {
+    #[must_use] pub const fn with_auto_fix(mut self, auto_fix: bool) -> Self {
         self.auto_fix = auto_fix;
         self
     }
@@ -175,8 +175,8 @@ impl QualityController {
         let skewness_values = self.calculate_skewness(mesh)?;
         let skewness_score = self.score_skewness(&skewness_values);
         
-        // Check manifold property
-        let manifold_score = if self.is_manifold(mesh)? { 1.0 } else { 0.0 };
+        // Check manifold property with detailed score
+        let manifold_score = self.calculate_manifold_score(&mesh.vertices, &mesh.faces);
         
         // Find quality issues
         self.find_aspect_ratio_issues(&aspect_ratios, &mut issues);
@@ -325,31 +325,36 @@ impl QualityController {
 
     /// Check if mesh is manifold
     fn is_manifold(&self, mesh: &Mesh3D) -> MeshResult<bool> {
-        // Simplified manifold check - full implementation would be more complex
-        // For now, check for duplicate vertices and degenerate faces
-        
-        let mut vertex_map = std::collections::HashMap::new();
-        for (i, vertex) in mesh.vertices.iter().enumerate() {
-            let key = (
-                (vertex.x * 1e9).round() as i64,
-                (vertex.y * 1e9).round() as i64,
-                (vertex.z * 1e9).round() as i64,
-            );
-            
-            if vertex_map.contains_key(&key) {
-                return Ok(false); // Duplicate vertices
+        // Calculate manifold score and return true if it's above threshold
+        let manifold_score = self.calculate_manifold_score(&mesh.vertices, &mesh.faces);
+        Ok(manifold_score > 0.8) // Consider manifold if 80% of edges are properly shared
+    }
+
+    /// Calculate manifold score for mesh validation
+    fn calculate_manifold_score(&self, vertices: &[Point3<f64>], faces: &[[usize; 3]]) -> f64 {
+        if faces.is_empty() { return 0.0; }
+
+        // Count edge usage to check for manifold properties
+        let mut edge_count = std::collections::HashMap::new();
+
+        for face in faces {
+            // Check each edge of the triangle
+            let edges = [
+                (face[0].min(face[1]), face[0].max(face[1])),
+                (face[1].min(face[2]), face[1].max(face[2])),
+                (face[2].min(face[0]), face[2].max(face[0])),
+            ];
+
+            for edge in &edges {
+                *edge_count.entry(*edge).or_insert(0) += 1;
             }
-            vertex_map.insert(key, i);
         }
 
-        // Check for degenerate faces
-        for face in &mesh.faces {
-            if face[0] == face[1] || face[1] == face[2] || face[0] == face[2] {
-                return Ok(false); // Degenerate face
-            }
-        }
+        // In a manifold mesh, each edge should be shared by exactly 2 faces
+        let total_edges = edge_count.len();
+        let manifold_edges = edge_count.values().filter(|&&count| count == 2).count();
 
-        Ok(true)
+        if total_edges == 0 { 0.0 } else { manifold_edges as f64 / total_edges as f64 }
     }
 
     /// Score aspect ratios
@@ -401,7 +406,7 @@ impl QualityController {
                     IssueSeverity::Warning
                 },
                 affected_elements: bad_elements,
-                description: format!("High aspect ratio elements found"),
+                description: "High aspect ratio elements found".to_string(),
                 suggested_fix: "Refine mesh or adjust geometry".to_string(),
             });
         }
@@ -497,7 +502,7 @@ impl Default for QualityRequirements {
 
 impl QualityRequirements {
     /// Requirements for CFD applications
-    pub fn cfd_requirements() -> Self {
+    #[must_use] pub const fn cfd_requirements() -> Self {
         Self {
             min_quality_score: 0.8,
             max_aspect_ratio: 5.0,
@@ -510,7 +515,7 @@ impl QualityRequirements {
     }
 
     /// Requirements for manufacturing applications
-    pub fn manufacturing_requirements() -> Self {
+    #[must_use] pub const fn manufacturing_requirements() -> Self {
         Self {
             min_quality_score: 0.9,
             max_aspect_ratio: 3.0,
@@ -528,22 +533,22 @@ impl From<crate::error::specialized::QualityValidationError> for QualityIssueTyp
     fn from(error: crate::error::specialized::QualityValidationError) -> Self {
         match error {
             crate::error::specialized::QualityValidationError::AspectRatioExceeded { .. } => {
-                QualityIssueType::HighAspectRatio
+                Self::HighAspectRatio
             }
             crate::error::specialized::QualityValidationError::MinAngleBelowThreshold { .. } => {
-                QualityIssueType::SmallAngle
+                Self::SmallAngle
             }
             crate::error::specialized::QualityValidationError::MaxAngleExceedsThreshold { .. } => {
-                QualityIssueType::LargeAngle
+                Self::LargeAngle
             }
             crate::error::specialized::QualityValidationError::DegenerateElements { .. } => {
-                QualityIssueType::DegenerateElement
+                Self::DegenerateElement
             }
             crate::error::specialized::QualityValidationError::NonManifold { .. } => {
-                QualityIssueType::NonManifold
+                Self::NonManifold
             }
             crate::error::specialized::QualityValidationError::SelfIntersections { .. } => {
-                QualityIssueType::SelfIntersection
+                Self::SelfIntersection
             }
         }
     }

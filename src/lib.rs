@@ -1,4 +1,4 @@
-//! Blue2Mesh - 3D Mesh Generation for Millifluidic Devices
+//! `Blue2Mesh` - 3D Mesh Generation for Millifluidic Devices
 //!
 //! A specialized library for converting 2D millifluidic designs from the scheme
 //! package into high-quality 3D meshes suitable for CFD simulation and manufacturing.
@@ -6,7 +6,7 @@
 //!
 //! # Architecture
 //!
-//! Blue2Mesh follows SOLID and CUPID design principles with a modular architecture:
+//! `Blue2Mesh` follows SOLID and CUPID design principles with a modular architecture:
 //!
 //! - **import**: Scheme JSON parsing and validation
 //! - **extrusion**: 2D to 3D extrusion algorithms with channel-specific handling
@@ -88,7 +88,7 @@ pub mod visualization;
 // Re-export commonly used types
 pub use error::{MeshError, MeshResult};
 pub use import::{SchemeImporter, DesignData};
-pub use extrusion::{ExtrusionConfig, ExtrusionEngine, ExtrusionResult};
+pub use extrusion::{ExtrusionConfig, ExtrusionEngine, ExtrusionResult, CsgBuildConfig};
 pub use mesh::{MeshGenerator, Mesh3D, MeshConfig};
 pub use quality::{QualityController, QualityMetrics};
 pub use export::{CfdExporter, ManufacturingExporter};
@@ -121,7 +121,7 @@ pub mod defaults {
 }
 
 /// Mesh generation quality levels
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum QualityLevel {
     /// Fast generation with basic quality
     Fast,
@@ -134,7 +134,7 @@ pub enum QualityLevel {
 }
 
 /// Mesh generation strategy
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MeshStrategy {
     /// Structured mesh generation
     Structured,
@@ -147,11 +147,11 @@ pub enum MeshStrategy {
 }
 
 /// Export format specification
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExportFormat {
-    /// VTK format for ParaView and CFD solvers
+    /// VTK format for `ParaView` and CFD solvers
     VTK,
-    /// OpenFOAM polyMesh format
+    /// `OpenFOAM` polyMesh format
     OpenFOAM,
     /// CGNS format for advanced CFD
     CGNS,
@@ -168,7 +168,7 @@ pub mod prelude {
     pub use crate::{
         MeshError, MeshResult,
         SchemeImporter, DesignData,
-        ExtrusionConfig, ExtrusionEngine, ExtrusionResult,
+        ExtrusionConfig, ExtrusionEngine, ExtrusionResult, CsgBuildConfig,
         MeshGenerator, Mesh3D, MeshConfig,
         QualityController, QualityMetrics,
         CfdExporter, ManufacturingExporter,
@@ -214,14 +214,14 @@ impl Default for Blue2MeshConfig {
     }
 }
 
-/// Main Blue2Mesh pipeline for complete workflow
+/// Main `Blue2Mesh` pipeline for complete workflow
 pub struct Blue2MeshPipeline {
     config: Blue2MeshConfig,
 }
 
 impl Blue2MeshPipeline {
     /// Create new pipeline with configuration
-    pub fn new(config: Blue2MeshConfig) -> Self {
+    #[must_use] pub const fn new(config: Blue2MeshConfig) -> Self {
         Self { config }
     }
 
@@ -282,7 +282,7 @@ impl Blue2MeshPipeline {
                     ManufacturingExporter::new().export_stl(&mesh, &output_path)?;
                 }
                 _ => {
-                    log::warn!("Export format {:?} not yet implemented", format);
+                    log::warn!("Export format {format:?} not yet implemented");
                 }
             }
             
@@ -295,7 +295,8 @@ impl Blue2MeshPipeline {
 
 /// Quick-start functions for common use cases
 pub mod quickstart {
-    use super::*;
+    use super::{Blue2MeshConfig, QualityLevel, ExportFormat, Blue2MeshPipeline};
+    use crate::extrusion::ExtrusionConfig;
 
     /// Generate CFD-ready mesh from scheme JSON with default settings
     pub fn scheme_to_cfd_mesh<P1: AsRef<std::path::Path>, P2: AsRef<std::path::Path>>(
@@ -316,38 +317,32 @@ pub mod quickstart {
         Ok(())
     }
 
-    /// Generate manufacturing-ready STL from scheme JSON
+    /// Generate manufacturing-ready STL from scheme JSON using pure CSG
     pub fn scheme_to_manufacturing<P1: AsRef<std::path::Path>, P2: AsRef<std::path::Path>>(
         scheme_json: P1,
         output_stl: P2,
     ) -> crate::error::MeshResult<()> {
-        let config = Blue2MeshConfig {
-            quality_level: QualityLevel::Balanced,
-            export_formats: vec![ExportFormat::STL],
-            wall_thickness: 200e-6, // Thicker walls for manufacturing
-            ..Default::default()
-        };
+        let extrusion_config = ExtrusionConfig::new()
+            .with_csg_operations(true); // Force CSG operations
+        scheme_to_manufacturing_with_config(scheme_json, output_stl, extrusion_config)
+    }
 
-        // Extract config values before moving
-        let channel_height = config.channel_height;
-        let wall_thickness = config.wall_thickness;
-        let mesh_resolution = config.mesh_resolution;
-
+    /// Generate manufacturing-ready STL from scheme JSON using pure CSG
+    /// with explicit extrusion/CSG configuration.
+    pub fn scheme_to_manufacturing_with_config<P1: AsRef<std::path::Path>, P2: AsRef<std::path::Path>>(
+        scheme_json: P1,
+        output_stl: P2,
+        extrusion_config: ExtrusionConfig,
+    ) -> crate::error::MeshResult<()> {
         // Import scheme design
         let design = crate::import::SchemeImporter::from_json_file(scheme_json)?;
 
-        // Configure extrusion
-        let extrusion_config = crate::extrusion::ExtrusionConfig::new()
-            .with_height(channel_height)
-            .with_wall_thickness(wall_thickness)
-            .with_mesh_resolution(mesh_resolution);
+        // Generate CSG mesh directly
+        let mesh_builder = crate::extrusion::Mesh3DBuilder::new(&extrusion_config);
+        let csg_mesh = mesh_builder.build_with_csg_pure(&design)?;
 
-        // Generate 3D mesh
-        let mesh = crate::extrusion::ExtrusionEngine::new(extrusion_config)
-            .extrude_design(&design)?;
-
-        // Export directly to the specified STL path
-        crate::export::ManufacturingExporter::new().export_stl(&mesh, &output_stl)?;
+        // Export directly to STL using pure CSG
+        crate::export::ManufacturingExporter::export_csg_stl(&csg_mesh, &output_stl)?;
 
         Ok(())
     }

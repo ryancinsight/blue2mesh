@@ -23,6 +23,8 @@ pub struct Mesh3D {
     pub junction_regions: HashMap<usize, Vec<usize>>,
     /// Mesh metadata
     pub metadata: MeshMetadata,
+    /// Optional direct CSG mesh for efficient export
+    pub csg_mesh: Option<csgrs::mesh::Mesh<()>>,
 }
 
 /// Metadata for 3D mesh
@@ -74,26 +76,26 @@ pub struct MeshGenerator {
 
 impl MeshGenerator {
     /// Create new mesh generator
-    pub fn new() -> Self {
+    #[must_use] pub fn new() -> Self {
         Self {
             config: MeshConfig::default(),
         }
     }
 
     /// Set mesh configuration
-    pub fn with_config(mut self, config: MeshConfig) -> Self {
+    #[must_use] pub const fn with_config(mut self, config: MeshConfig) -> Self {
         self.config = config;
         self
     }
 
     /// Set mesh resolution
-    pub fn with_resolution(mut self, resolution: f64) -> Self {
+    #[must_use] pub const fn with_resolution(mut self, resolution: f64) -> Self {
         self.config.resolution = resolution;
         self
     }
 
     /// Set quality level
-    pub fn with_quality_level(mut self, level: crate::QualityLevel) -> Self {
+    #[must_use] pub const fn with_quality_level(mut self, level: crate::QualityLevel) -> Self {
         self.config.quality_level = level;
         self
     }
@@ -145,7 +147,7 @@ impl MeshGenerator {
     }
 
     /// Map mesh strategy to extrusion strategy
-    fn map_strategy_to_extrusion(&self) -> crate::extrusion::ExtrusionStrategy {
+    const fn map_strategy_to_extrusion(&self) -> crate::extrusion::ExtrusionStrategy {
         match self.config.strategy {
             crate::MeshStrategy::Structured => crate::extrusion::ExtrusionStrategy::Linear,
             crate::MeshStrategy::Unstructured => crate::extrusion::ExtrusionStrategy::Swept,
@@ -193,13 +195,14 @@ impl MeshGenerator {
 
 impl Mesh3D {
     /// Create new empty mesh
-    pub fn new() -> Self {
+    #[must_use] pub fn new() -> Self {
         Self {
             vertices: Vec::new(),
             faces: Vec::new(),
             channel_regions: HashMap::new(),
             junction_regions: HashMap::new(),
             metadata: MeshMetadata::default(),
+            csg_mesh: None,
         }
     }
 
@@ -263,8 +266,8 @@ impl Mesh3D {
 
     /// Convert to csgrs mesh for boolean operations
     pub fn to_csgrs_mesh(&self) -> MeshResult<csgrs::mesh::Mesh<String>> {
-        use csgrs::mesh::polygon::Polygon;
-        use csgrs::mesh::vertex::Vertex;
+        use csgrs::polygon::Polygon;
+        use csgrs::vertex::Vertex;
         use csgrs::float_types::Real;
         use csgrs::float_types::parry3d::na::{Point3 as CsgrsPoint3, Vector3 as CsgrsVector3};
 
@@ -310,9 +313,9 @@ impl Mesh3D {
 
             for vertex in &polygon.vertices {
                 let pos = Point3::new(
-                    vertex.pos.x as f64,
-                    vertex.pos.y as f64,
-                    vertex.pos.z as f64,
+                    vertex.position.x,
+                    vertex.position.y,
+                    vertex.position.z,
                 );
 
                 let vertex_idx = vertices.len();
@@ -340,6 +343,7 @@ impl Mesh3D {
             channel_regions: HashMap::new(),
             junction_regions: HashMap::new(),
             metadata: MeshMetadata::default(),
+            csg_mesh: None,
         })
     }
 }

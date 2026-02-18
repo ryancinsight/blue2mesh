@@ -31,10 +31,35 @@ pub struct ExtrusionConfig {
     pub strategy: ExtrusionStrategy,
     /// Quality requirements
     pub quality_requirements: QualityRequirements,
+    /// CSG-specific build controls
+    pub csg: CsgBuildConfig,
+}
+
+/// CSG-specific parameters for scheme-to-STL conversion.
+///
+/// All dimensions are in millimeters because scheme geometry is represented in mm.
+#[derive(Debug, Clone)]
+pub struct CsgBuildConfig {
+    /// Substrate thickness in mm
+    pub substrate_height_mm: f64,
+    /// Fallback channel diameter (used when width is missing/invalid) in mm
+    pub fallback_channel_diameter_mm: f64,
+    /// Global multiplier applied to imported channel width
+    pub channel_diameter_scale: f64,
+    /// Circular tessellation segments for each tube section
+    pub channel_segments: usize,
+    /// End-cap extension for first/last segment in mm
+    pub segment_extension_mm: f64,
+    /// Minimum segment length before skipping (mm)
+    pub min_segment_length_mm: f64,
+    /// Maximum sampled path segments per channel (decimation guard)
+    pub max_path_segments: usize,
+    /// Maximum allowable substrate bbox deviation after boolean op (mm)
+    pub max_bbox_deviation_mm: f64,
 }
 
 /// Extrusion strategy options
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExtrusionStrategy {
     /// Simple linear extrusion
     Linear,
@@ -98,7 +123,7 @@ pub struct ExtrusionEngine {
 
 impl ExtrusionEngine {
     /// Create new extrusion engine
-    pub fn new(config: ExtrusionConfig) -> Self {
+    #[must_use] pub const fn new(config: ExtrusionConfig) -> Self {
         Self { config }
     }
 
@@ -131,7 +156,18 @@ impl ExtrusionEngine {
 
         // Build final mesh using CSG boolean operations
         let mesh = if self.config.use_csg_operations {
-            mesh_builder.build_with_csg(design)?
+            // Use pure CSG - no conversion to Mesh3D
+            let csg_mesh = mesh_builder.build_with_csg_pure(design)?;
+
+            // Create minimal Mesh3D wrapper for compatibility
+            Mesh3D {
+                vertices: vec![Point3::new(0.0, 0.0, 0.0)], // Placeholder
+                faces: vec![[0, 0, 0]], // Placeholder
+                channel_regions: HashMap::new(),
+                junction_regions: HashMap::new(),
+                metadata: crate::mesh::MeshMetadata::default(),
+                csg_mesh: Some(csg_mesh),
+            }
         } else {
             mesh_builder.build()?
         };
@@ -232,8 +268,7 @@ impl ExtrusionEngine {
 
         println!("   🔗 Creating tessellated channel: {:.1}mm wide × {:.1}mm deep",
                  width * 1000.0, depth * 1000.0);
-        println!("   📐 Channel mesh: {}×{}×{} divisions",
-                 length_divisions, width_divisions, depth_divisions);
+        println!("   📐 Channel mesh: {length_divisions}×{width_divisions}×{depth_divisions} divisions");
 
         let start_idx = builder.vertices.len();
         let mut vertex_count = 0;
@@ -295,8 +330,7 @@ impl ExtrusionEngine {
 
         builder.channel_regions.insert(channel.id, channel_face_indices);
 
-        println!("   ✅ Tessellated channel created with {} vertices and {} faces",
-                 vertex_count, face_count);
+        println!("   ✅ Tessellated channel created with {vertex_count} vertices and {face_count} faces");
 
         Ok(())
     }
@@ -383,7 +417,7 @@ impl ExtrusionEngine {
         
         for (i, _point) in channel.path_3d.iter().enumerate() {
             let t = i as f64 / (channel.path_3d.len() - 1) as f64;
-            let current_width = inlet_width + t * (outlet_width - inlet_width);
+            let current_width = t.mul_add(outlet_width - inlet_width, inlet_width);
             
             let cross_section = vec![
                 Point3::new(-current_width / 2.0, 0.0, 0.0),
@@ -454,9 +488,9 @@ impl ExtrusionEngine {
             let start_angle = i as f64 * std::f64::consts::PI / 2.0;
             
             for j in 0..segments_per_corner {
-                let angle = start_angle + (j as f64 / segments_per_corner as f64) * std::f64::consts::PI / 2.0;
-                let x = corner.x + radius * angle.cos();
-                let y = corner.y + radius * angle.sin();
+                let angle = start_angle + (f64::from(j) / f64::from(segments_per_corner)) * std::f64::consts::PI / 2.0;
+                let x = radius.mul_add(angle.cos(), corner.x);
+                let y = radius.mul_add(angle.sin(), corner.y);
                 points.push(Point3::new(x, y, 0.0));
             }
         }
@@ -467,6 +501,7 @@ impl ExtrusionEngine {
 
 /// 3D mesh builder for extrusion operations
 pub struct Mesh3DBuilder {
+    config: ExtrusionConfig,
     vertices: Vec<Point3<f64>>,
     faces: Vec<[usize; 3]>,
     channel_regions: HashMap<usize, Vec<usize>>, // Channel ID -> face indices
@@ -475,8 +510,9 @@ pub struct Mesh3DBuilder {
 
 impl Mesh3DBuilder {
     /// Create new mesh builder
-    pub fn new(_config: &ExtrusionConfig) -> Self {
+    #[must_use] pub fn new(config: &ExtrusionConfig) -> Self {
         Self {
+            config: config.clone(),
             vertices: Vec::new(),
             faces: Vec::new(),
             channel_regions: HashMap::new(),
@@ -703,8 +739,7 @@ impl Mesh3DBuilder {
         // Add tessellated side walls
         self.generate_side_walls(width, length, height, resolution, &mut vertex_count, &mut face_count)?;
 
-        println!("   ✅ Complete tessellated substrate created with {} vertices and {} faces",
-                 vertex_count, face_count);
+        println!("   ✅ Complete tessellated substrate created with {vertex_count} vertices and {face_count} faces");
 
         Ok(())
     }
@@ -802,98 +837,239 @@ impl Mesh3DBuilder {
             channel_regions: self.channel_regions,
             junction_regions: self.junction_regions,
             metadata: crate::mesh::MeshMetadata::default(),
+            csg_mesh: None,
         })
     }
 
-    /// Build final mesh using CSG boolean operations for proper solid geometry
-    pub fn build_with_csg(self, design: &DesignData) -> MeshResult<Mesh3D> {
+    /// Build final mesh using CSG boolean operations - returns CSG mesh directly
+    pub fn build_with_csg_pure(self, design: &DesignData) -> MeshResult<csgrs::mesh::Mesh<()>> {
         use csgrs::mesh::Mesh as CsgMesh;
-        use csgrs::traits::CSG;
+        use csgrs::csg::CSG;
+        use csgrs::float_types::Real;
+        use csgrs::float_types::parry3d::na::Matrix4;
 
-        println!("   🔧 Building mesh with CSG boolean operations");
+        // Perform CSG in millimeter coordinates for numerical robustness, then
+        // convert back to meters before returning.
+        const INTERNAL_TO_METERS: f64 = 1e-3;
 
-        // Step 1: Create solid substrate cube
+        let csg = self.config.csg;
+        let substrate_height_mm = if csg.substrate_height_mm > 0.0 {
+            csg.substrate_height_mm
+        } else {
+            CsgBuildConfig::default().substrate_height_mm
+        };
+        let fallback_channel_diameter_mm = if csg.fallback_channel_diameter_mm > 0.0 {
+            csg.fallback_channel_diameter_mm
+        } else {
+            CsgBuildConfig::default().fallback_channel_diameter_mm
+        };
+        let channel_diameter_scale = csg.channel_diameter_scale.max(0.1);
+        let channel_segments = csg.channel_segments.max(3);
+        let segment_extension_mm = csg.segment_extension_mm.max(0.0);
+        let min_segment_length_mm = csg.min_segment_length_mm.max(1e-9);
+        let max_path_segments = csg.max_path_segments.max(1);
+        let max_bbox_deviation_mm = csg.max_bbox_deviation_mm.max(0.0);
+
+        println!("   🔧 Building mesh with CSG boolean operations (pure CSG)");
+
+        // Step 1: Create solid substrate cube in millimeters
         let box_dims = &design.metadata.box_dims;
-        let width = box_dims[0] * 1e-3;   // Convert mm to meters
-        let length = box_dims[1] * 1e-3;  // Convert mm to meters
-        let height = 10e-3;               // 10mm height
+        let width = box_dims[0];
+        let length = box_dims[1];
+        let height = substrate_height_mm;
 
-        println!("   📦 Creating substrate cube: {:.1}mm × {:.1}mm × {:.1}mm",
-                 width * 1000.0, length * 1000.0, height * 1000.0);
+        println!(
+            "   📦 Creating substrate cube: {:.1}mm × {:.1}mm × {:.1}mm",
+            width,
+            length,
+            height
+        );
 
-        let substrate = CsgMesh::<()>::cuboid(width, length, height, None);
+        let mut running = CsgMesh::<()>::cuboid(width, length, height, None);
+        let mut total_subtracted_segments = 0usize;
 
-        // Step 2: Create channel geometry and subtract from substrate
-        let mut result = substrate;
-
+        // Step 2: Build each channel from its full path and subtract from substrate
         for channel in &design.channels {
-            println!("   🔗 Subtracting cylindrical channel {} from substrate", channel.id);
+            if channel.path_3d.len() < 2 {
+                println!(
+                    "   ⚠️  Skipping channel {} because it has fewer than 2 path points",
+                    channel.id
+                );
+                continue;
+            }
 
-            // Create channel as a cylinder (6mm diameter, centered in Z)
-            let channel_radius = 3e-3;   // 3mm radius = 6mm diameter
-            let extension = 2e-3;        // 2mm extension on each side to ensure clean intersection
-            let channel_length = width + 2.0 * extension;  // Extended length
+            let base_channel_diameter_mm = if channel.properties.width > 0.0 {
+                channel.properties.width
+            } else {
+                fallback_channel_diameter_mm
+            };
+            let channel_diameter_mm = base_channel_diameter_mm * channel_diameter_scale;
+            let channel_radius_mm = 0.5 * channel_diameter_mm;
+            // Center channels in Z so bores are fully internal to the substrate.
+            let channel_center_z = height * 0.5;
+            let raw_segments = channel.path_3d.len() - 1;
+            let decimation_step = if raw_segments > max_path_segments {
+                (raw_segments as f64 / max_path_segments as f64).ceil() as usize
+            } else {
+                1usize
+            };
 
-            // Position channel to start BEFORE the cube and end AFTER the cube
-            let start = channel.path_3d[0];
-            let channel_x = -extension;                  // Start BEFORE cube (at -2mm)
-            let channel_y = start.y * 1e-3;              // Center on channel path (Y direction)
-            let channel_z = height / 2.0;                // Center in Z direction (5mm from bottom)
+            let mut sampled_path = Vec::new();
+            for (idx, point) in channel.path_3d.iter().enumerate() {
+                if idx == 0 || idx + 1 == channel.path_3d.len() || idx % decimation_step == 0 {
+                    sampled_path.push(*point);
+                }
+            }
+            let total_segments = sampled_path.len().saturating_sub(1);
 
-            println!("   📍 Channel start position: X={:.1}mm, Y={:.1}mm, Z={:.1}mm",
-                     channel_x * 1000.0, channel_y * 1000.0, channel_z * 1000.0);
-            println!("   📏 Channel: {:.1}mm diameter × {:.1}mm length",
-                     channel_radius * 2000.0, channel_length * 1000.0);
-            println!("   🔧 Cylinder extends from X={:.1}mm to X={:.1}mm (cube is 0 to {:.1}mm)",
-                     channel_x * 1000.0, (channel_x + channel_length) * 1000.0, width * 1000.0);
+            println!(
+                "   🔗 Building channel {} from {} path segments (raw {}, diameter {:.2} mm)",
+                channel.id,
+                total_segments,
+                raw_segments,
+                channel_diameter_mm
+            );
 
-            // Create horizontal cylinder (along X-axis) with extensions
-            let channel_volume = CsgMesh::<()>::cylinder(channel_radius, channel_length, 128, None)
-                .rotate(0.0, 90.0, 0.0)  // Rotate 90° around Y-axis to align with X-axis
-                .translate(channel_x, channel_y, channel_z);
+            let mut used_segments = 0usize;
+            let mut skipped_segments = 0usize;
 
-            // Subtract channel from substrate
-            result = result.difference(&channel_volume);
+            for (segment_index, segment) in sampled_path.windows(2).enumerate() {
+                let mut start = Point3::new(
+                    segment[0].x,
+                    segment[0].y,
+                    channel_center_z,
+                );
+                let mut end = Point3::new(
+                    segment[1].x,
+                    segment[1].y,
+                    channel_center_z,
+                );
+
+                let direction = end - start;
+                let segment_length = direction.norm();
+                if segment_length <= min_segment_length_mm {
+                    continue;
+                }
+
+                let unit_direction = direction / segment_length;
+                if segment_index == 0 {
+                    start = start - unit_direction * segment_extension_mm;
+                }
+                if segment_index + 1 == total_segments {
+                    end = end + unit_direction * segment_extension_mm;
+                }
+
+                let segment_tube = CsgMesh::<()>::frustum_ptp(
+                    Point3::new(start.x, start.y, start.z),
+                    Point3::new(end.x, end.y, end.z),
+                    channel_radius_mm,
+                    channel_radius_mm,
+                    channel_segments,
+                    None,
+                );
+
+                let candidate = running.difference(&segment_tube);
+                let bbox = candidate.bounding_box();
+                let dx = bbox.maxs.x - bbox.mins.x;
+                let dy = bbox.maxs.y - bbox.mins.y;
+                let dz = bbox.maxs.z - bbox.mins.z;
+                let bbox_score = (dx - width).abs() + (dy - length).abs() + (dz - height).abs();
+
+                if bbox_score <= max_bbox_deviation_mm {
+                    running = candidate;
+                    used_segments += 1;
+                } else {
+                    skipped_segments += 1;
+                }
+            }
+
+            if used_segments == 0 {
+                println!(
+                    "   ⚠️  Channel {} had no valid segments after filtering",
+                    channel.id
+                );
+            } else {
+                total_subtracted_segments += used_segments;
+                println!(
+                    "   ✅ Subtracted channel {} using {} segments (skipped {})",
+                    channel.id, used_segments, skipped_segments
+                );
+            }
         }
 
-        // Post-CSG operations completed
-        println!("   ✅ CSG operations completed");
+        println!(
+            "   🔧 Finished subtracting channels with {} successful segment operations",
+            total_subtracted_segments
+        );
+        if !design.channels.is_empty() && total_subtracted_segments == 0 {
+            return Err(MeshError::mesh_generation(
+                "CSG channel subtraction failed for all channels; no channel volume was carved",
+            ));
+        }
+        let result = running;
 
-        // Step 3: Convert CSG mesh to our Mesh3D format
-        self.convert_csg_to_mesh3d(result)
+        // Convert back to meters for downstream compatibility.
+        let scale_to_meters = Matrix4::new_scaling(INTERNAL_TO_METERS as Real);
+        let result_meters = result.transform(&scale_to_meters);
+
+        println!("   ✅ CSG operations completed");
+        println!("   📊 Final CSG mesh: {} polygons", result_meters.polygons.len());
+
+        Ok(result_meters)
     }
 
-    /// Convert CSG mesh to our internal Mesh3D format
+    /// Convert CSG mesh to our internal `Mesh3D` format with minimal processing
     fn convert_csg_to_mesh3d(self, csg_mesh: csgrs::mesh::Mesh<()>) -> MeshResult<Mesh3D> {
-        // Extract unique vertices from all polygons
+        // Extract vertices and faces with minimal conversion overhead
         let mut vertices = Vec::new();
-        let mut vertex_map = HashMap::new();
         let mut faces = Vec::new();
 
+        // Process each polygon directly without aggressive vertex deduplication
         for polygon in &csg_mesh.polygons {
             if polygon.vertices.len() < 3 { continue; }
-            // Robust triangulation per polygon (uses earcut or spade based on features)
-            let triangles = polygon.triangulate();
-            for tri in triangles {
-                let mut tri_idx = [0usize; 3];
-                for (k, vtx) in tri.into_iter().enumerate() {
-                    let pos = vtx.pos;
-                    let key = (
-                        (pos.x * 1e9) as i64,  // higher precision fixed-point to avoid visible quantization
-                        (pos.y * 1e9) as i64,
-                        (pos.z * 1e9) as i64,
-                    );
-                    let idx = if let Some(&existing_index) = vertex_map.get(&key) {
-                        existing_index
-                    } else {
-                        let new_index = vertices.len();
-                        vertices.push(Point3::new(pos.x, pos.y, pos.z));
-                        vertex_map.insert(key, new_index);
-                        new_index
-                    };
-                    tri_idx[k] = idx;
+
+            // For triangular polygons, add directly
+            if polygon.vertices.len() == 3 {
+                let start_idx = vertices.len();
+                for vertex in &polygon.vertices {
+                    vertices.push(Point3::new(
+                        vertex.position.x,
+                        vertex.position.y,
+                        vertex.position.z,
+                    ));
                 }
-                faces.push(tri_idx);
+                faces.push([start_idx, start_idx + 1, start_idx + 2]);
+            } else {
+                // For non-triangular polygons, triangulate
+                let triangles = polygon.triangulate();
+                for tri in triangles {
+                    let start_idx = vertices.len();
+                    for vtx in tri {
+                        vertices.push(Point3::new(
+                            vtx.position.x,
+                            vtx.position.y,
+                            vtx.position.z,
+                        ));
+                    }
+
+                    // Only add non-degenerate triangles
+                    let v0 = vertices[start_idx];
+                    let v1 = vertices[start_idx + 1];
+                    let v2 = vertices[start_idx + 2];
+
+                    // Check if triangle has non-zero area
+                    let edge1 = v1 - v0;
+                    let edge2 = v2 - v0;
+                    let cross = edge1.cross(&edge2);
+                    let area = cross.norm() / 2.0;
+
+                    if area > 1e-12 { // Only add triangles with meaningful area
+                        faces.push([start_idx, start_idx + 1, start_idx + 2]);
+                    } else {
+                        // Remove the degenerate vertices we just added
+                        vertices.truncate(start_idx);
+                    }
+                }
             }
         }
 
@@ -906,7 +1082,128 @@ impl Mesh3DBuilder {
             channel_regions: HashMap::new(),
             junction_regions: HashMap::new(),
             metadata: crate::mesh::MeshMetadata::default(),
+            csg_mesh: None,
         })
+    }
+
+    /// Use CSG mesh directly without conversion - store for direct export
+    fn use_csg_mesh_directly(self, csg_mesh: csgrs::mesh::Mesh<()>) -> MeshResult<Mesh3D> {
+        println!("   📊 Using CSG mesh directly: {} polygons", csg_mesh.polygons.len());
+
+        // Create a Mesh3D that stores the CSG mesh for direct export
+        // Extract basic info for compatibility but keep the CSG mesh for efficient export
+        let vertex_count = csg_mesh.polygons.iter()
+            .map(|p| p.vertices.len())
+            .sum::<usize>();
+        let face_count = csg_mesh.polygons.len();
+
+        println!("   📊 CSG mesh stats: ~{vertex_count} vertices, {face_count} faces");
+
+        Ok(Mesh3D {
+            vertices: vec![Point3::new(0.0, 0.0, 0.0)], // Placeholder - CSG mesh has the real data
+            faces: vec![[0, 0, 0]], // Placeholder - CSG mesh has the real data
+            channel_regions: HashMap::new(),
+            junction_regions: HashMap::new(),
+            metadata: crate::mesh::MeshMetadata::default(),
+            csg_mesh: Some(csg_mesh), // Store the CSG mesh directly
+        })
+    }
+
+    /// Simple CSG mesh conversion that preserves geometry
+    fn convert_csg_to_mesh3d_simple(self, csg_mesh: csgrs::mesh::Mesh<()>) -> MeshResult<Mesh3D> {
+        // Extract vertices and faces from CSG mesh with minimal processing
+        let mut vertices: Vec<Point3<f64>> = Vec::new();
+        let mut faces: Vec<[usize; 3]> = Vec::new();
+
+        // Use basic vertex deduplication with reasonable precision
+        let mut vertex_map = HashMap::new();
+
+        for polygon in &csg_mesh.polygons {
+            if polygon.vertices.len() < 3 { continue; }
+
+            // Triangulate polygon
+            let triangles = polygon.triangulate();
+            for tri in triangles {
+                let mut tri_idx = [0usize; 3];
+                let mut valid_triangle = true;
+
+                for (k, vtx) in tri.into_iter().enumerate() {
+                    let pos = vtx.position;
+
+                    // Check for degenerate vertices
+                    if !pos.x.is_finite() || !pos.y.is_finite() || !pos.z.is_finite() {
+                        valid_triangle = false;
+                        break;
+                    }
+
+                    // Use reasonable precision for vertex deduplication (micrometers)
+                    let key = (
+                        (pos.x * 1e6).round() as i64,  // Micrometer precision
+                        (pos.y * 1e6).round() as i64,
+                        (pos.z * 1e6).round() as i64,
+                    );
+
+                    let idx = if let Some(&existing_index) = vertex_map.get(&key) {
+                        existing_index
+                    } else {
+                        let new_index = vertices.len();
+                        // CSG mesh is already in meters, no conversion needed
+                        vertices.push(Point3::new(pos.x, pos.y, pos.z));
+                        vertex_map.insert(key, new_index);
+                        new_index
+                    };
+                    tri_idx[k] = idx;
+                }
+
+                // Only add valid, non-degenerate triangles
+                if valid_triangle && tri_idx[0] != tri_idx[1] && tri_idx[1] != tri_idx[2] && tri_idx[0] != tri_idx[2] {
+                    faces.push(tri_idx);
+                }
+            }
+        }
+
+        println!("   📊 CSG mesh converted: {} vertices, {} faces",
+                 vertices.len(), faces.len());
+
+        // Validate mesh manifold properties
+        let manifold_score = self.calculate_manifold_score(&vertices, &faces);
+        println!("   🔍 Manifold score: {manifold_score:.3}");
+
+        Ok(Mesh3D {
+            vertices,
+            faces,
+            channel_regions: HashMap::new(),
+            junction_regions: HashMap::new(),
+            metadata: crate::mesh::MeshMetadata::default(),
+            csg_mesh: None,
+        })
+    }
+
+    /// Calculate manifold score for mesh validation
+    fn calculate_manifold_score(&self, vertices: &[Point3<f64>], faces: &[[usize; 3]]) -> f64 {
+        if faces.is_empty() { return 0.0; }
+
+        // Count edge usage to check for manifold properties
+        let mut edge_count = HashMap::new();
+
+        for face in faces {
+            // Check each edge of the triangle
+            let edges = [
+                (face[0].min(face[1]), face[0].max(face[1])),
+                (face[1].min(face[2]), face[1].max(face[2])),
+                (face[2].min(face[0]), face[2].max(face[0])),
+            ];
+
+            for edge in &edges {
+                *edge_count.entry(*edge).or_insert(0) += 1;
+            }
+        }
+
+        // In a manifold mesh, each edge should be shared by exactly 2 faces
+        let total_edges = edge_count.len();
+        let manifold_edges = edge_count.values().filter(|&&count| count == 2).count();
+
+        if total_edges == 0 { 0.0 } else { manifold_edges as f64 / total_edges as f64 }
     }
 }
 
@@ -922,6 +1219,24 @@ impl Default for ExtrusionConfig {
             use_csg_operations: true,  // Enable CSG for proper boolean operations
             strategy: ExtrusionStrategy::Swept,
             quality_requirements: QualityRequirements::default(),
+            csg: CsgBuildConfig::default(),
+        }
+    }
+}
+
+impl Default for CsgBuildConfig {
+    fn default() -> Self {
+        Self {
+            substrate_height_mm: 10.0,
+            fallback_channel_diameter_mm: 6.0,
+            // Scheme demo channels are 1.0 mm wide; scale to ~3.0 mm, which is
+            // in the range of small human arteries.
+            channel_diameter_scale: 3.0,
+            channel_segments: 6,
+            segment_extension_mm: 1.0,
+            min_segment_length_mm: 1e-3,
+            max_path_segments: 8,
+            max_bbox_deviation_mm: 1e-2,
         }
     }
 }
@@ -940,43 +1255,79 @@ impl Default for QualityRequirements {
 
 impl ExtrusionConfig {
     /// Create new extrusion configuration
-    pub fn new() -> Self {
+    #[must_use] pub fn new() -> Self {
         Self::default()
     }
 
     /// Set channel height
-    pub fn with_height(mut self, height: f64) -> Self {
+    #[must_use] pub const fn with_height(mut self, height: f64) -> Self {
         self.height = height;
         self
     }
 
     /// Set wall thickness
-    pub fn with_wall_thickness(mut self, thickness: f64) -> Self {
+    #[must_use] pub const fn with_wall_thickness(mut self, thickness: f64) -> Self {
         self.wall_thickness = thickness;
         self
     }
 
     /// Set mesh resolution
-    pub fn with_mesh_resolution(mut self, resolution: f64) -> Self {
+    #[must_use] pub const fn with_mesh_resolution(mut self, resolution: f64) -> Self {
         self.mesh_resolution = resolution;
         self
     }
 
     /// Set junction smoothing radius
-    pub fn with_junction_radius(mut self, radius: f64) -> Self {
+    #[must_use] pub const fn with_junction_radius(mut self, radius: f64) -> Self {
         self.junction_radius = radius;
         self
     }
 
     /// Enable or disable wall generation
-    pub fn with_walls(mut self, generate_walls: bool) -> Self {
+    #[must_use] pub const fn with_walls(mut self, generate_walls: bool) -> Self {
         self.generate_walls = generate_walls;
         self
     }
 
     /// Set extrusion strategy
-    pub fn with_strategy(mut self, strategy: ExtrusionStrategy) -> Self {
+    #[must_use] pub const fn with_strategy(mut self, strategy: ExtrusionStrategy) -> Self {
         self.strategy = strategy;
+        self
+    }
+
+    /// Enable or disable CSG operations
+    #[must_use] pub const fn with_csg_operations(mut self, use_csg: bool) -> Self {
+        self.use_csg_operations = use_csg;
+        self
+    }
+
+    /// Replace all CSG build parameters.
+    #[must_use] pub fn with_csg_config(mut self, csg: CsgBuildConfig) -> Self {
+        self.csg = csg;
+        self
+    }
+
+    /// Scale imported channel widths for CSG subtraction.
+    #[must_use] pub fn with_csg_channel_diameter_scale(mut self, scale: f64) -> Self {
+        self.csg.channel_diameter_scale = scale;
+        self
+    }
+
+    /// Set CSG circular tessellation segments per channel section.
+    #[must_use] pub fn with_csg_channel_segments(mut self, segments: usize) -> Self {
+        self.csg.channel_segments = segments;
+        self
+    }
+
+    /// Set max sampled path segments per channel for CSG decimation.
+    #[must_use] pub fn with_csg_max_path_segments(mut self, max_segments: usize) -> Self {
+        self.csg.max_path_segments = max_segments;
+        self
+    }
+
+    /// Set substrate thickness used by CSG path (mm).
+    #[must_use] pub fn with_csg_substrate_height_mm(mut self, height_mm: f64) -> Self {
+        self.csg.substrate_height_mm = height_mm;
         self
     }
 }
